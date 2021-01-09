@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+        "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml"
+      xmlns:h="http://xmlns.jcp.org/jsf/html"
+      xmlns:f="http://xmlns.jcp.org/jsf/core"
+      xmlns:p="http://primefaces.org/ui">
+<f:view>
+    <h:head>
+        <title>Start</title>
+        <meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+        <h:outputStylesheet>body {
+            background-color: antiquewhite;
+            font-family: sans-serif;
+            text-align: center;
+        }
+        </h:outputStylesheet>
+        <script type="text/javascript" src="https://ajax.aspnetcdn.com/ajax/jQuery/jquery-3.2.1.min.js"/>
+    </h:head>
+    <h:body>
+        <div>
+            <h1>
+                Лабораторная работа №3<br></br>
+            </h1>
+            <h2>
+                Лесников Алексей Р3231<br></br>
+                Вариант 2748
+            </h2>
+        </div>
+        <div id="content">
+            <div id="time"/>
+            <div id="description">
+                <h:form>
+                    <h:commandButton value="main" action="main"/>
+                </h:form>
+            </div>
+        </div>
+    </h:body>
+    <h:outputScript>$(document).ready(function () {
+        function updateClock() {
+            var now = new Date();
+            var time = now.getHours() + ':' + now.getMinutes() + ':' + now.getSeconds();
+            var date = [now.getDate(),
+                now.getMonth()+1,
+                now.getFullYear()].join('.');
+            document.getElementById('time').innerHTML = [time, date].join(' | ');
+            setTimeout(updateClock, 11000);
+        }
+        updateClock();
+    });</h:outputScript>
+</f:view>
+</html>

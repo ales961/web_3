@@ -1,0 +1,180 @@
+﻿<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<html xmlns:h="http://xmlns.jcp.org/jsf/html"
+      xmlns:f="http://xmlns.jcp.org/jsf/core"
+      xmlns:p="http://primefaces.org/ui">
+<f:view>
+    <h:head>
+        <title>main</title>
+        <meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+        <script type="text/javascript" src="https://ajax.aspnetcdn.com/ajax/jQuery/jquery-3.2.1.min.js"/>
+        <h:outputStylesheet>
+            body {
+                background-color: antiquewhite;
+                font-family: sans-serif;
+                text-align: center;
+            }
+            tr,th,a {
+                font-size: 10pt;
+                font-weight: bold;
+                margin-left: 100px;
+                font-family: Arial ;
+                border: darkgray;
+                background-color: antiquewhite;
+                border-style: double;
+                border-color: darkgoldenrod;
+            }
+        </h:outputStylesheet>
+    </h:head>
+    <h:body>
+        <h:form id="form" method="post" class="data-form" prependId="false">
+            <h:panelGrid columns="2" cellpadding="5" styleClass="ui-grid">
+                <h:outputLabel value="X: " />
+                <h:selectOneRadio value = "#{Bean.x}" id="enterX">
+                    <f:selectItem itemValue = "-4" itemLabel = "-4" />
+                    <f:selectItem itemValue = "-3" itemLabel = "-3" />
+                    <f:selectItem itemValue = "-2" itemLabel = "-2" />
+                    <f:selectItem itemValue = "-1" itemLabel = "-1" />
+                    <f:selectItem itemValue = "0" itemLabel = "0" />
+                    <f:selectItem itemValue = "1" itemLabel = "1" />
+                    <f:selectItem itemValue = "2" itemLabel = "2" />
+                    <f:selectItem itemValue = "3" itemLabel = "3" />
+                    <f:selectItem itemValue = "4" itemLabel = "4" />
+                </h:selectOneRadio>
+                <h:outputLabel value="Y: " />
+                <h:inputText value = "#{Bean.y}" id="enterY" title="y" validatorMessage="Введите от -5 до 3">
+                    <f:validateDoubleRange minimum="-5.0" maximum="3.0" for="enterY"/>
+                </h:inputText><br/>
+                <h:message for="enterY" style="color:#ff0000"/>
+
+                <h:outputLabel value="R: " />
+                <p:spinner  id="r" value="#{Bean.r}" stepFactor="0.1"  min="0.1" max="3.0" onchange="draw(this.value)"/>
+                <h:message for="r" style="color:#ff0000"/>
+                <h:commandButton value="Отправить" action="#{Bean.add}"/>
+            </h:panelGrid>
+        </h:form>
+
+        <h:form id="form1" style="display: none;">
+            <h:inputHidden id="x_hid" value="#{Bean.x1}" />
+            <h:inputHidden id="y_hid" value="#{Bean.y1}" />
+            <h:inputHidden id="r_hid" value="#{Bean.r1}" />
+            <p:remoteCommand process="@form" partialSubmit="true" name="addPoint" action="#{Bean.add_p}"/>
+            <p:remoteCommand process="@form" partialSubmit="true" name="getStr" action="#{Bean.getStr}" update="panelStr"/>
+        </h:form>
+
+        <h:panelGroup id="panelStr">
+            <h:inputHidden  value="#{Bean.str}" id="str" />
+        </h:panelGroup>
+
+        <canvas id="canvas" width="900" height="900"></canvas>
+
+        <h:dataTable value="#{Bean.getPoints()}" var="c">
+            <h:column>
+                <f:facet name="header">
+                    X
+                </f:facet>
+                #{c.x}
+            </h:column>
+
+            <h:column>
+                <f:facet name="header">
+                    Y
+                </f:facet>
+                #{c.y}
+            </h:column>
+
+            <h:column>
+                <f:facet name="header">
+                    R
+                </f:facet>
+                #{c.r}
+            </h:column>
+
+            <h:column>
+                <f:facet name="header">
+                    Попадание
+                </f:facet>
+                #{c.hit}
+            </h:column>
+
+        </h:dataTable>
+        <h:outputScript>
+            var r;
+            var canvas = document.getElementById("canvas");
+            var context = canvas.getContext("2d");
+            context.beginPath();
+            context.moveTo(30, 450);
+            context.lineTo(870, 450);
+            context.moveTo(450, 30);
+            context.lineTo(450, 870);
+            context.closePath();
+            context.stroke();
+            function dataPoint(e) {
+                var crd = getCursorPosition(e);
+                var _x = crd.x_coord - canvas.offsetLeft;
+                var _y = crd.y_coord - canvas.offsetTop;
+                $('input[id$=x_hid]').val(r*(_x-450)/150);
+                $('input[id$=y_hid]').val(-r*(_y-450)/150);
+                $('input[id$=r_hid]').val(r);
+                addPoint();
+            }
+            function getCursorPosition(e) {
+                var x_coord;
+                var y_coord;
+                x_coord = e.pageX;
+                y_coord = e.pageY;
+                return {x_coord: x_coord, y_coord: y_coord}
+            }
+            function draw(val) {
+                r = val;
+                context.clearRect(0, 0, canvas.width, canvas.height);
+                context.beginPath();
+                context.moveTo(30, 450);
+                context.lineTo(870, 450);
+                context.moveTo(450, 30);
+                context.lineTo(450, 870);
+                context.closePath();
+                context.stroke();
+                canvas.addEventListener("click", dataPoint);
+                context.beginPath();
+                context.arc(450, 450, 150*r, 0, Math.PI/2);
+                context.lineTo(450, 450);
+                context.closePath();
+                context.rect(450-150*r, 450, 150*r, 150*r);
+                context.fillStyle = 'dodgerblue';
+                context.fill();
+                context.beginPath();
+                context.moveTo(450, 450);
+                context.lineTo(450-75*r, 450);
+                context.lineTo(450, 450-75*r);
+                context.lineTo(450, 450);
+                context.closePath();
+                context.fillStyle = 'dodgerblue';
+                context.fill();
+
+
+                getStr();
+                var arr = $("[id$='str']").val().split("#");
+                arr.forEach(function (item, i, arr) {
+                    if (i%3 == 0) {
+                        drawPoint(arr[i],arr[i+1],r);
+                    }
+                });
+
+
+                function drawPoint(x1, y1, r1) {
+                    var _x = (x1*150/r1+450);
+                    var _y = (-y1*150/r1+450);
+                    context.beginPath();
+                    context.rect(_x, _y, 1, 1);
+                    context.closePath();
+                    context.stroke();
+                }
+
+
+            }
+        </h:outputScript>
+    </h:body>
+</f:view>
+</html>
