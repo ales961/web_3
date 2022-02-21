@@ -1,0 +1,561 @@
+/* USER CODE BEGIN Header */
+/**
+  ******************************************************************************
+  * @file           : main.c
+  * @brief          : Main program body
+  ******************************************************************************
+  * @attention
+  *
+  * <h2><center>&copy; Copyright (c) 2021 STMicroelectronics.
+  * All rights reserved.</center></h2>
+  *
+  * This software component is licensed by ST under BSD 3-Clause license,
+  * the "License"; You may not use this file except in compliance with the
+  * License. You may obtain a copy of the License at:
+  *                        opensource.org/licenses/BSD-3-Clause
+  *
+  ******************************************************************************
+  */
+/* USER CODE END Header */
+
+/* Includes ------------------------------------------------------------------*/
+#include "main.h"
+#include <stdio.h>
+#include "gpio.h"
+#include "usart.h"
+/* Private includes ----------------------------------------------------------*/
+/* USER CODE BEGIN Includes */
+#include "gpio_driver.h"
+#include "morse_converter.h"
+#include "usart_driver.h"
+
+/* USER CODE END Includes */
+
+/* Private typedef -----------------------------------------------------------*/
+/* USER CODE BEGIN PTD */
+
+/* USER CODE END PTD */
+
+/* Private define ------------------------------------------------------------*/
+/* USER CODE BEGIN PD */
+#define BUFFER_SIZE 8
+/* USER CODE END PD */
+
+/* Private macro -------------------------------------------------------------*/
+/* USER CODE BEGIN PM */
+
+/* USER CODE END PM */
+
+/* Private variables ---------------------------------------------------------*/
+
+/* USER CODE BEGIN PV */
+const uint32_t SHORT_DOWN_DURATION = 500;
+const uint32_t LONG_UP_DURATION = 5000;
+
+int input_sequence = 0;
+char input_end_index = 0;
+char input_current_index = 0;
+uint32_t input_blink_timestamp;
+
+GPIO_PinState prev_button_state = GPIO_PIN_SET;
+uint32_t change_timestamp;
+uint32_t current_timestamp;
+
+char transmit_needed = 0;
+uint8_t letter_to_transmit;
+
+uint8_t received_char;
+
+uint8_t buffer[BUFFER_SIZE];
+char buffer_tail = 0;
+char buffer_head = 0;
+char is_buffer_full = 0;
+
+int letter_buffer;
+char letter_end_index = 0;
+char letter_current_index = 0;
+uint32_t blink_green_timestamp;
+
+char is_interrupt_enabled = 0;
+char transmit_started = 0;
+char receive_started = 0;
+char new_letter_arrived = 0;
+
+const uint32_t SHORT_BLINK_DELAY = 500;
+const uint32_t LONG_BLINK_DELAY = 1000;
+const uint32_t INPUT_BLINK_DELAY = 500;
+
+/* USER CODE END PV */
+
+/* Private function prototypes -----------------------------------------------*/
+void SystemClock_Config(void);
+/* USER CODE BEGIN PFP */
+
+/* USER CODE END PFP */
+
+/* Private user code ---------------------------------------------------------*/
+/* USER CODE BEGIN 0 */
+void buffer_put(uint8_t letter) {
+    if (!is_buffer_full) {
+        buffer[buffer_tail] = letter;
+        buffer_tail = (buffer_tail + 1) % BUFFER_SIZE;
+        if (buffer_tail == buffer_head)
+            is_buffer_full = 1;
+    }
+}
+
+char is_buffer_empty() {
+    return buffer_tail == buffer_head && !is_buffer_full;
+}
+
+uint8_t buffer_get() {
+    if (!is_buffer_empty()) {
+        uint8_t letter = buffer[buffer_head];
+        buffer_head = (buffer_head + 1) % BUFFER_SIZE;
+        is_buffer_full = 0;
+        return letter;
+    }
+    return 0;
+}
+
+void toggle_interrupt_mode() {
+    is_interrupt_enabled = is_interrupt_enabled == 1 ? 0 : 1;
+    if (is_interrupt_enabled) {
+        enable_interrupt();
+    } else {
+        disable_interrupt();
+    }
+}
+
+void reset_sequence() {
+    input_sequence = 0;
+    input_end_index = 0;
+    input_current_index = 0;
+}
+
+void handle_button_input() {
+
+    GPIO_PinState current_state = get_button_state();
+
+    if (current_state == GPIO_PIN_RESET) {
+        if (prev_button_state == GPIO_PIN_SET) {
+            //pressed, start timer
+            change_timestamp = current_timestamp;
+        }
+    } else {
+        if (prev_button_state == GPIO_PIN_SET) {
+            //not pressed
+            //check timer
+            //if long - decipher and send to pc
+            uint32_t up_duration = get_diff_to_now(change_timestamp);
+            if (up_duration >= LONG_UP_DURATION && input_end_index > 0) {
+                char c = morse_to_char(input_sequence);
+                if (c != -1) {
+                    transmit_needed = 1;
+                    //decipher
+                    letter_to_transmit = c;
+                }
+                reset_sequence();
+            }
+        } else {
+            //button released
+            //start timer
+            //check how long was down
+            if (input_end_index == 4) {
+                reset_sequence();
+            }
+            uint32_t down_duration = get_diff_to_now(change_timestamp);
+            if (down_duration <= SHORT_DOWN_DURATION) {
+                //put short in sequence
+                input_sequence = input_sequence * 10 + 1;
+                input_end_index++;
+
+            } else {
+                //put long in sequence
+                input_sequence = input_sequence * 10 + 2;
+                input_end_index++;
+            }
+            change_timestamp = current_timestamp;
+        }
+    }
+    prev_button_state = current_state;
+}
+
+void put_new_letter_if_exist() {
+    if (!is_buffer_empty()) {
+        char letter = buffer_get();
+        letter_buffer = letter_to_morse(letter);
+
+        int len = 0;
+        int buf_temp = letter_buffer;
+        while (buf_temp > 0) {
+            buf_temp /= 10;
+            len++;
+        }
+
+        letter_end_index = len;
+        letter_current_index = 0;
+    }
+}
+
+void handle_letter_sequence_blink() {
+    uint8_t c = 1;
+    uint8_t amount = letter_end_index - letter_current_index;
+    for (int i = 0; i < amount - 1; i++) {
+        c *= 10;
+    }
+    int current_element = (letter_buffer / c) % 10;
+
+    uint32_t duration = current_element == 2 ? LONG_BLINK_DELAY : SHORT_BLINK_DELAY;
+    if (get_diff_to_now(blink_green_timestamp) >= duration) {
+        if (get_diode_state(GREEN)) {
+            set_diode_off(GREEN);
+            letter_current_index++;
+
+        } else {
+            set_diode_on(GREEN);
+        }
+        blink_green_timestamp = get_current_timestamp();
+    }
+}
+
+void handle_input_blink() {
+    uint32_t diff = get_diff_to_now(input_blink_timestamp);
+
+    if (diff >= INPUT_BLINK_DELAY) {
+        uint8_t c = 1;
+        uint8_t amount = input_end_index - input_current_index;
+        for (int i = 0; i < amount - 1; i++) {
+            c *= 10;
+        }
+        uint8_t current_element = (input_sequence / c) % 10;
+        enum PinColor diode = current_element == 2 ? RED : YELLOW;
+
+        if (get_diode_state(diode)) {
+            set_diode_off(diode);
+            input_current_index++;
+        } else {
+            set_diode_on(diode);
+        }
+        input_blink_timestamp = current_timestamp;
+    }
+}
+
+void handle_new_letter() {
+    if (received_char >= 97 && received_char <= 122) {
+        buffer_put(received_char);
+    } else if (received_char == '+') {
+        toggle_interrupt_mode();
+    }
+}
+
+void reset_received_letter() {
+    received_char = 0;
+    receive_started = 0;
+}
+
+void handle_receive_it() {
+    start_transmit(&huart6, &received_char);
+    handle_new_letter();
+    reset_received_letter();
+    new_letter_arrived = 0;
+}
+
+void handle_transmit() {
+    //clear arr
+    reset_sequence();
+    transmit_needed = 0;
+    transmit_started = 0;
+}
+
+void receive_and_transmit_blocking() {
+    //check if something arrived
+    received_char = receive_letter_blocking(&huart6);
+    if (received_char) {
+        transmit_letter_blocking(&huart6, &received_char);
+        handle_new_letter();
+        reset_received_letter();
+    }
+    //try to transmit data
+    if (transmit_needed) {
+        if (transmit_letter_blocking(&huart6, &letter_to_transmit)) {
+            handle_transmit();
+        }
+    }
+}
+
+void init_receive_and_transmit_it() {
+    if (!received_char && !receive_started) {
+        start_wait_receive(&huart6, &received_char);
+        receive_started = 1;
+    }
+    if (transmit_needed && !transmit_started) {
+        start_transmit(&huart6, &letter_to_transmit);
+        transmit_started = 1;
+    }
+}
+/* USER CODE END 0 */
+
+/**
+  * @brief  The application entry point.
+  * @retval int
+  */
+int main(void) {
+    /* USER CODE BEGIN 1 */
+
+    /* USER CODE END 1 */
+
+    /* MCU Configuration--------------------------------------------------------*/
+
+    /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
+    HAL_Init();
+
+    /* USER CODE BEGIN Init */
+
+    /* USER CODE END Init */
+
+    /* Configure the system clock */
+    SystemClock_Config();
+
+    /* USER CODE BEGIN SysInit */
+
+    /* USER CODE END SysInit */
+
+    /* Initialize all configured peripherals */
+    MX_GPIO_Init();
+    MX_USART6_UART_Init();
+    /* USER CODE BEGIN 2 */
+
+    /* USER CODE END 2 */
+
+    /* Infinite loop */
+    /* USER CODE BEGIN WHILE */
+#pragma clang diagnostic push
+#pragma ide diagnostic ignored "EndlessLoop"
+    while (1) {
+        /* USER CODE END WHILE */
+
+        /* USER CODE BEGIN 3 */
+
+        current_timestamp = get_current_timestamp();
+
+        //receive button input
+        handle_button_input();
+
+        if (!is_interrupt_enabled) {
+            receive_and_transmit_blocking();
+        } else {
+            init_receive_and_transmit_it();
+            if (new_letter_arrived) handle_receive_it();
+        }
+
+        //manage sequence blinking
+        //if sequence is not empty
+        //if diode is off - enable it
+        //if diode is on - check how long it enabled
+        //if long enough - disable
+
+        //add new letter sequence to blink if current ended
+        if (letter_current_index == letter_end_index) {
+            put_new_letter_if_exist();
+        }
+
+        if (letter_current_index < letter_end_index) {
+            handle_letter_sequence_blink();
+        }
+
+        //blink input
+        if (input_current_index < input_end_index) {
+            handle_input_blink();
+        }
+    }
+#pragma clang diagnostic pop
+    /* USER CODE END 3 */
+}
+
+/**
+ * @brief System Clock Configuration
+ * @retval None
+ */
+void SystemClock_Config(void) {
+    RCC_OscInitTypeDef RCC_OscInitStruct = {0};
+    RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
+
+    /** Configure the main internal regulator output voltage
+     */
+    __HAL_RCC_PWR_CLK_ENABLE();
+    __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE3);
+    /** Initializes the CPU, AHB and APB busses clocks
+     */
+    RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
+    RCC_OscInitStruct.HSIState = RCC_HSI_ON;
+    RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
+    RCC_OscInitStruct.PLL.PLLState = RCC_PLL_NONE;
+    if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK) {
+        Error_Handler();
+    }
+    /** Initializes the CPU, AHB and APB busses clocks
+    */
+    RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_SYSCLK
+                                  | RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2;
+    RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_HSI;
+    RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
+    RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
+    RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
+
+    if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_0) != HAL_OK) {
+        Error_Handler();
+    }
+}
+
+/* USER CODE BEGIN 4 */
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
+    if (huart == &huart6) {
+        new_letter_arrived = 1;
+    }
+}
+
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart) {
+    if (huart == &huart6) {
+        handle_transmit();
+    }
+}
+/* USER CODE END 4 */
+
+/**
+  * @brief  This function is executed in case of error occurrence.
+  * @retval None
+  */
+void Error_Handler(void) {
+    /* USER CODE BEGIN Error_Handler_Debug */
+    /* User can add his own implementation to report the HAL error return state */
+
+    /* USER CODE END Error_Handler_Debug */
+}
+
+#ifdef  USE_FULL_ASSERT
+/**
+  * @brief  Reports the name of the source file and the source line number
+  *         where the assert_param error has occurred.
+  * @param  file: pointer to the source file name
+  * @param  line: assert_param error line source number
+  * @retval None
+  */
+void assert_failed(uint8_t *file, uint32_t line)
+{
+  /* USER CODE BEGIN 6 */
+  /* User can add his own implementation to report the file name and line number,
+     ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
+  /* USER CODE END 6 */
+}
+#endif /* USE_FULL_ASSERT */
+
+/************************ (C) COPYRIGHT STMicroelectronics *****END OF FILE****/
+
+
+
+
+
+
+
+
+
+
+
+
+
+#include "gpio_driver.h"
+
+GPIO_PinState get_button_state() {
+    //set == 1 == not pressed
+    //reset == 0 == pressed!!!!
+    return HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_15);
+}
+
+uint32_t get_current_timestamp() {
+    return HAL_GetTick();
+}
+
+uint32_t get_diff_to_now(uint32_t start_timestamp) {
+    return get_current_timestamp() - start_timestamp;
+}
+
+uint16_t get_pin_by_color(enum PinColor color) {
+    switch (color) {
+        case GREEN:
+            return GPIO_PIN_13;
+        case YELLOW:
+            return GPIO_PIN_14;
+        case RED:
+            return GPIO_PIN_15;
+        default:
+            return GPIO_PIN_13;
+    }
+}
+
+void blink_pin(enum PinColor color, uint32_t delay) {
+    uint16_t pin = get_pin_by_color(color);
+
+    HAL_GPIO_TogglePin(GPIOD, pin);
+    HAL_Delay(delay);
+    HAL_GPIO_TogglePin(GPIOD, pin);
+    HAL_Delay(delay);
+}
+
+GPIO_PinState get_diode_state(enum PinColor color) {
+    uint16_t pin = get_pin_by_color(color);
+    return HAL_GPIO_ReadPin(GPIOD, pin);
+}
+
+void set_diode_on(enum PinColor color) {
+    uint16_t pin = get_pin_by_color(color);
+    HAL_GPIO_WritePin(GPIOD, pin, GPIO_PIN_SET);
+}
+
+void set_diode_off(enum PinColor color) {
+    uint16_t pin = get_pin_by_color(color);
+    HAL_GPIO_WritePin(GPIOD, pin, GPIO_PIN_RESET);
+}
+
+
+
+
+
+
+
+#include "usart_driver.h"
+
+uint8_t receive_letter_blocking(struct __UART_HandleTypeDef *huart) {
+    uint8_t received_char;
+    if (HAL_UART_Receive(huart, &received_char, 1, 20) == HAL_OK) {
+        return received_char;
+    }
+    return 0;
+}
+
+char transmit_letter_blocking(struct __UART_HandleTypeDef *huart, uint8_t *letter_to_transmit) {
+    if (HAL_UART_Transmit(huart, letter_to_transmit, 1, 20) == HAL_OK) {
+        return 1;
+    }
+    return 0;
+}
+
+void start_wait_receive(struct __UART_HandleTypeDef *huart, uint8_t *letter_to_receive) {
+    HAL_UART_Receive_IT(huart, letter_to_receive, 1);
+}
+
+void start_transmit(struct __UART_HandleTypeDef *huart, uint8_t *letter_to_transmit) {
+    HAL_UART_Transmit_IT(huart, letter_to_transmit, 1);
+}
+
+void enable_interrupt() {
+    HAL_NVIC_EnableIRQ(USART6_IRQn);
+}
+
+void disable_interrupt() {
+    HAL_NVIC_DisableIRQ(USART6_IRQn);
+}
+
+
+
+
